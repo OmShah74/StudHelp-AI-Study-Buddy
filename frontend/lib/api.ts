@@ -56,3 +56,24 @@ export const deleteDocument = (docId: string) => {
   // Axios uses a different syntax for DELETE requests. The URL includes the docId.
   return apiClient.delete(`/documents/${docId}`);
 };
+
+export interface RecommendationResult {
+    title: string;
+    link: string;
+    snippet: string;
+    thumbnail?: string | null;
+}
+
+export interface RecommendationResponse {
+    youtube: RecommendationResult[];
+    articles: RecommendationResult[];
+}
+
+// --- NEW FUNCTION ---
+export const getRecommendations = async (docId: string, topic: string): Promise<RecommendationResponse> => {
+  const response = await apiClient.post('/recommendations', {
+    doc_id: docId,
+    topic: topic,
+  });
+  return response.data;
+};

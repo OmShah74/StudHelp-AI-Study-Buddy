@@ -8,3 +8,7 @@ class QuizRequest(BaseModel):
     doc_id: str
     # Add a default value and validation using Field
     num_questions: int = Field(default=5, ge=1, le=10)
+    
+class RecommendationRequest(BaseModel):
+    doc_id: str
+    topic: str

@@ -4,6 +4,8 @@ import json
 import traceback
 from supabase import create_client, Client
 from gotrue.types import User
+from app.services import recommendation_service
+from app.schemas.models import ChatRequest, QuizRequest, RecommendationRequest
 
 from app.services import document_service, vector_service, llm_service
 from app.schemas.models import ChatRequest, QuizRequest
@@ -220,4 +222,27 @@ async def delete_document(doc_id: str, current_user: User = Depends(get_current_
         raise HTTPException(
             status_code=500,
             detail=f"An internal server error occurred while trying to delete the document: {e}"
+        )
+        
+@router.post("/recommendations")
+async def get_recommendations(request: RecommendationRequest, current_user: User = Depends(get_current_user)):
+    verify_document_ownership(request.doc_id, str(current_user.id))
+    
+    try:
+        search_query = f"{request.topic} tutorial explanation"
+        
+        youtube_results = recommendation_service.search_youtube(search_query)
+        article_results = recommendation_service.search_web_articles(search_query)
+
+        return {
+            "youtube": youtube_results,
+            "articles": article_results
+        }
+
+    except Exception as e:
+        print(f"An error occurred during recommendation fetching: {e}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"An internal server error occurred while fetching recommendations: {e}"
         )
