@@ -1,0 +1,61 @@
+# Node / Next.js Frontend Files
+# -----------------------------
+# Dependency directories
+frontend/node_modules/
+
+# Next.js build output
+frontend/.next/
+frontend/out/
+
+# Production build files
+frontend/build/
+
+# Static HTML exports
+frontend/export/
+
+# Local environment variables (NEVER commit secrets)
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Log files
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+
+# Editor directories and files
+.idea
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Operating System Files
+# ----------------------
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Miscellaneous
+# -------------
+# TypeScript cache
+*.tsbuildinfo
+
+# Deno cache
+.deno
+
+# Svelte cache
+.svelte-kit

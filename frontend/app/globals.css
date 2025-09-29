@@ -1,0 +1,40 @@
+/* frontend/app/globals.css */
+@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-slate-900 text-slate-200;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom class for our gradient text */
+.gradient-text {
+  @apply bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent;
+}
+
+/* Custom styles for ReactFlow mind map to match our dark theme */
+.react-flow .react-flow__node {
+  @apply bg-slate-800 border-indigo-500 text-slate-100 rounded-lg shadow-lg;
+}
+
+.react-flow .react-flow__handle {
+  @apply bg-cyan-400;
+}
+
+.react-flow .react-flow__edge-path {
+  @apply stroke-indigo-400;
+}
+
+.react-flow .react-flow__controls button {
+  @apply bg-slate-800 border-b-slate-700 hover:bg-slate-700;
+}
+.react-flow .react-flow__controls button svg {
+  fill: #e2e8f0; /* slate-200 */
+}
+
+.react-flow .react-flow__background {
+  @apply bg-slate-900;
+}
