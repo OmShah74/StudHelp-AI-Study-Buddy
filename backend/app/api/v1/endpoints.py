@@ -187,3 +187,37 @@ async def generate_quiz(request: QuizRequest, current_user: User = Depends(get_c
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"An internal server error occurred during quiz generation: {e}")
+
+@router.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str, current_user: User = Depends(get_current_user)):
+    # 1. First, verify the user owns this document before proceeding.
+    # This is the most critical security step.
+    verify_document_ownership(doc_id, str(current_user.id))
+
+    try:
+        # 2. Delete the associated files from Supabase Storage.
+        # It's better to delete from storage first. If this fails, we haven't lost the database record.
+        storage_path = f"{doc_id}/" # The folder path in the bucket
+        # Supabase storage doesn't have a simple "delete folder" command,
+        # so we list files in the "folder" and delete them.
+        files_to_delete_response = supabase.storage.from_("files").list(path=storage_path)
+        if files_to_delete_response:
+            files_to_delete = [f['name'] for f in files_to_delete_response]
+            # Prepend the folder path to each file name for deletion
+            full_file_paths = [f"{storage_path}{name}" for name in files_to_delete]
+            if full_file_paths:
+                supabase.storage.from_("files").remove(full_file_paths)
+
+        # 3. Delete the document's metadata record from the Supabase database.
+        # This uses the `storage_path` column which is our `doc_id`.
+        supabase.table("documents").delete().eq("storage_path", doc_id).eq("user_id", str(current_user.id)).execute()
+
+        return {"message": "Document and associated files deleted successfully."}
+        
+    except Exception as e:
+        print(f"An error occurred during document deletion: {e}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"An internal server error occurred while trying to delete the document: {e}"
+        )

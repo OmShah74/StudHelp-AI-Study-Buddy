@@ -2,10 +2,12 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { uploadDocument } from '@/lib/api';
+import { uploadDocument, deleteDocument } from '@/lib/api';
 import toast from 'react-hot-toast';
 import { UploadCloud, LoaderCircle, FileText, PlusCircle, Trash2 } from 'lucide-react';
+import ConfirmModal from '@/components/ConfirmModal';
 
+// Define the structure of a document for TypeScript
 interface Document {
   id: string;
   created_at: string;
@@ -19,7 +21,12 @@ export default function Dashboard() {
   const [isLoadingDocs, setIsLoadingDocs] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  
+  // State to manage the delete confirmation modal
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [docToDelete, setDocToDelete] = useState<Document | null>(null);
 
+  // Fetches the list of documents for the current user from Supabase
   const fetchDocuments = async () => {
     if (user) {
       setIsLoadingDocs(true);
@@ -39,20 +46,28 @@ export default function Dashboard() {
     }
   };
 
+  // Effect to fetch documents when the component mounts or the user changes
   useEffect(() => {
     if (!authLoading) {
       fetchDocuments();
     }
   }, [user, authLoading]);
 
+  // Handles the selection of a file from the input
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-        setFile(selectedFile);
-        toast.success(`${selectedFile.name} selected!`);
+        if (selectedFile.size > 10 * 1024 * 1024) { // 10MB limit
+            toast.error("File is too large (> 10MB).");
+            setFile(null);
+        } else {
+            setFile(selectedFile);
+            toast.success(`${selectedFile.name} selected!`);
+        }
     }
   };
 
+  // Handles the file upload process
   const handleUpload = async () => {
     if (!file) return;
     setIsUploading(true);
@@ -60,8 +75,8 @@ export default function Dashboard() {
     try {
       await uploadDocument(file);
       toast.success('Document uploaded!', { id: uploadToast });
-      setFile(null);
-      fetchDocuments(); // Refresh the document list
+      setFile(null); // Reset file input after successful upload
+      fetchDocuments(); // Refresh the document list to show the new document
     } catch (err: any) {
       const errorMessage = err.response?.data?.detail || 'Upload failed. Please try again.';
       toast.error(errorMessage, { id: uploadToast });
@@ -71,69 +86,112 @@ export default function Dashboard() {
     }
   };
   
-  const handleDelete = async (doc: Document) => {
-    // Advanced feature: Implement delete logic here
-    toast('Delete functionality coming soon!', { icon: '🚧' });
-  }
+  // --- Deletion Logic ---
+  const openDeleteModal = (doc: Document) => {
+    setDocToDelete(doc);
+    setIsModalOpen(true);
+  };
 
+  const closeDeleteModal = () => {
+    setDocToDelete(null);
+    setIsModalOpen(false);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!docToDelete) return;
+
+    const deleteToast = toast.loading(`Deleting ${docToDelete.file_name}...`);
+    try {
+      await deleteDocument(docToDelete.storage_path);
+      toast.success("Document deleted successfully!", { id: deleteToast });
+      
+      // Update the UI optimistically by filtering out the deleted document
+      setDocuments(prevDocs => prevDocs.filter(d => d.id !== docToDelete.id));
+
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.detail || 'Deletion failed.';
+      toast.error(errorMessage, { id: deleteToast });
+      console.error(err);
+    } finally {
+      closeDeleteModal();
+    }
+  };
+
+  // Show a loading spinner while checking for user authentication
   if (authLoading) {
     return <div className="text-center mt-20"><LoaderCircle className="animate-spin mx-auto text-indigo-400" size={48} /></div>;
   }
 
   return (
-    <main className="container mx-auto p-4 md:p-8">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Document List */}
-        <div className="lg:col-span-2">
-          <h2 className="text-3xl font-bold mb-6 text-white">Your Study Library</h2>
-          <div className="space-y-4">
-            {isLoadingDocs ? (
-                <div className="text-center p-8"><LoaderCircle className="animate-spin mx-auto text-indigo-400" /></div>
-            ) : documents.length > 0 ? (
-              documents.map(doc => (
-                <Link key={doc.id} href={`/${doc.storage_path}`} className="group flex items-center justify-between p-4 bg-slate-800 border border-slate-700 rounded-lg hover:border-indigo-500 hover:bg-slate-700/50 transition-all">
-                  <div className="flex items-center space-x-4">
-                    <FileText className="text-indigo-400" />
-                    <div>
-                      <p className="font-semibold text-slate-100 group-hover:text-indigo-300 transition-colors">{doc.file_name}</p>
-                      <p className="text-sm text-slate-400">Uploaded on {new Date(doc.created_at).toLocaleDateString()}</p>
-                    </div>
+    <>
+      <ConfirmModal
+        isOpen={isModalOpen}
+        onClose={closeDeleteModal}
+        onConfirm={handleConfirmDelete}
+        title="Confirm Deletion"
+        message={`Are you sure you want to permanently delete "${docToDelete?.file_name}"? All associated data (chats, summaries, etc.) will be lost. This action cannot be undone.`}
+      />
+
+      <main className="container mx-auto p-4 md:p-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Document List Section */}
+          <div className="lg:col-span-2">
+            <h2 className="text-3xl font-bold mb-6 text-white">Your Study Library</h2>
+            <div className="space-y-4">
+              {isLoadingDocs ? (
+                  <div className="text-center p-8"><LoaderCircle className="animate-spin mx-auto text-indigo-400" /></div>
+              ) : documents.length > 0 ? (
+                documents.map(doc => (
+                  <div key={doc.id} className="group flex items-center justify-between p-4 bg-slate-800 border border-slate-700 rounded-lg hover:border-indigo-500 hover:bg-slate-700/50 transition-all">
+                    <Link href={`/${doc.storage_path}`} className="flex-grow min-w-0">
+                      <div className="flex items-center space-x-4">
+                        <FileText className="text-indigo-400 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <p className="font-semibold text-slate-100 group-hover:text-indigo-300 transition-colors truncate">{doc.file_name}</p>
+                          <p className="text-sm text-slate-400">Uploaded on {new Date(doc.created_at).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                    </Link>
+                    <button 
+                      onClick={(e) => { e.preventDefault(); openDeleteModal(doc); }} 
+                      className="p-2 rounded-md hover:bg-red-500/20 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all ml-4 flex-shrink-0"
+                      title="Delete document"
+                    >
+                      <Trash2 size={18} />
+                    </button>
                   </div>
-                  {/* <button onClick={(e) => { e.preventDefault(); handleDelete(doc); }} className="p-2 rounded-md hover:bg-red-500/20 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Trash2 size={18} />
-                  </button> */}
-                </Link>
-              ))
-            ) : (
-              <div className="text-center p-12 border-2 border-dashed border-slate-700 rounded-lg">
-                  <h3 className="text-xl font-semibold text-white">Your library is empty</h3>
-                  <p className="text-slate-400 mt-2">Upload your first document to get started.</p>
-              </div>
-            )}
-          </div>
-        </div>
-        
-        {/* Upload Section */}
-        <div className="bg-slate-800 border border-slate-700 rounded-xl shadow-lg p-6 h-fit lg:sticky lg:top-24">
-          <h3 className="text-xl font-bold mb-4 flex items-center"><PlusCircle className="mr-2 text-indigo-400" /> Upload New Document</h3>
-          <div className="mt-4">
-            <label htmlFor="doc-upload" className="flex flex-col items-center justify-center w-full h-48 border-2 border-slate-600 border-dashed rounded-lg cursor-pointer bg-slate-800/50 hover:bg-slate-700/50 transition-colors">
-                <div className="flex flex-col items-center justify-center">
-                    <UploadCloud className="w-10 h-10 mb-3 text-slate-500" />
-                    {file ? (
-                        <p className="font-semibold text-sm text-green-400">{file.name}</p>
-                    ) : (
-                        <p className="text-sm text-slate-400"><span className="font-semibold text-indigo-400">Click to upload</span></p>
-                    )}
+                ))
+              ) : (
+                <div className="text-center p-12 border-2 border-dashed border-slate-700 rounded-lg">
+                    <h3 className="text-xl font-semibold text-white">Your library is empty</h3>
+                    <p className="text-slate-400 mt-2">Upload your first document using the panel on the right.</p>
                 </div>
-                <input id="doc-upload" type="file" className="hidden" onChange={handleFileChange} accept=".pdf,.docx" disabled={isUploading}/>
-            </label>
+              )}
+            </div>
           </div>
-          <button onClick={handleUpload} disabled={!file || isUploading} className="w-full mt-4 flex justify-center py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors">
-            {isUploading ? <LoaderCircle className="animate-spin" /> : 'Upload & Process'}
-          </button>
+          
+          {/* Upload Section */}
+          <div className="bg-slate-800 border border-slate-700 rounded-xl shadow-lg p-6 h-fit lg:sticky lg:top-24">
+            <h3 className="text-xl font-bold mb-4 flex items-center"><PlusCircle className="mr-2 text-indigo-400" /> Upload New Document</h3>
+            <div className="mt-4">
+              <label htmlFor="doc-upload" className="flex flex-col items-center justify-center w-full h-48 border-2 border-slate-600 border-dashed rounded-lg cursor-pointer bg-slate-800/50 hover:bg-slate-700/50 transition-colors">
+                  <div className="flex flex-col items-center justify-center text-center">
+                      <UploadCloud className="w-10 h-10 mb-3 text-slate-500" />
+                      {file ? (
+                          <p className="font-semibold text-sm text-green-400 px-2">{file.name}</p>
+                      ) : (
+                          <p className="text-sm text-slate-400"><span className="font-semibold text-indigo-400">Click to upload</span> or drag & drop</p>
+                      )}
+                  </div>
+                  <input id="doc-upload" type="file" className="hidden" onChange={handleFileChange} accept=".pdf,.docx" disabled={isUploading}/>
+              </label>
+            </div>
+            <button onClick={handleUpload} disabled={!file || isUploading} className="w-full mt-4 flex justify-center py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors">
+              {isUploading ? <LoaderCircle className="animate-spin" /> : 'Upload & Process'}
+            </button>
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </>
   );
 }

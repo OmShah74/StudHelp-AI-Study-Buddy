@@ -51,3 +51,8 @@ export const generateQuiz = async (docId: string, numQuestions: number): Promise
   const response = await apiClient.post('/quiz', { doc_id: docId, num_questions: numQuestions });
   return response.data;
 };
+
+export const deleteDocument = (docId: string) => {
+  // Axios uses a different syntax for DELETE requests. The URL includes the docId.
+  return apiClient.delete(`/documents/${docId}`);
+};
