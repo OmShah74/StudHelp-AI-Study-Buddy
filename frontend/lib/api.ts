@@ -109,3 +109,50 @@ export const convertToPdf = async (file: File): Promise<Blob> => {
 
   return response.data;
 };
+
+export interface Document {
+  id?: string; // May not be present in all contexts
+  created_at?: string;
+  file_name: string;
+  storage_path: string;
+}
+
+export interface ChatSession {
+  id: string;
+  user_id: string;
+  session_name: string;
+  created_at: string;
+}
+
+// --- NEW FUNCTIONS ---
+export const createChatSession = async (sessionName: string, documentIds: string[]): Promise<ChatSession> => {
+  const response = await apiClient.post('/chat-sessions', {
+    session_name: sessionName,
+    document_ids: documentIds,
+  });
+  return response.data;
+};
+
+export const getChatSessions = async (): Promise<ChatSession[]> => {
+  const response = await apiClient.get('/chat-sessions');
+  return response.data;
+};
+
+export const getSessionDetails = async (sessionId: string): Promise<{ session: ChatSession, documents: Document[] }> => {
+    const response = await apiClient.get(`/chat-sessions/${sessionId}`);
+    return response.data;
+};
+
+export const postChatMessage = async (sessionId: string, query: string): Promise<{ answer: string, citations: string[] }> => {
+    const response = await apiClient.post(`/chat/${sessionId}`, { query });
+    return response.data;
+};
+
+export const getDocuments = async (): Promise<Document[]> => {
+  const response = await apiClient.get('/documents');
+  return response.data;
+};
+
+export const deleteChatSession = (sessionId: string) => {
+  return apiClient.delete(`/chat-sessions/${sessionId}`);
+};

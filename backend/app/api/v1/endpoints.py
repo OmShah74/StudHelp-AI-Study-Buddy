@@ -9,7 +9,7 @@ import tempfile
 import os
 from docx2pdf import convert
 from app.services import recommendation_service
-from app.schemas.models import ChatRequest, QuizRequest, RecommendationRequest
+from app.schemas.models import ChatRequest, QuizRequest, RecommendationRequest, ChatSessionCreate, ChatSessionResponse, DocumentResponse
 from docx import Document
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
@@ -17,7 +17,7 @@ from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate
 import io
-
+from typing import List
 from app.services import document_service, vector_service, llm_service
 from app.schemas.models import ChatRequest, QuizRequest, RecommendationRequest, CommentRequest, CommentResponse
 from app.core.auth import get_current_user
@@ -25,6 +25,11 @@ from app.core.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 
 router = APIRouter()
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+def get_document_details(doc_ids: list[str]) -> list[dict]:
+    if not doc_ids:
+        return []
+    res = supabase.table("documents").select("file_name, storage_path").in_("storage_path", doc_ids).execute()
+    return res.data
 
 # Helper function to verify that the user making the request owns the document.
 # This is called at the beginning of every endpoint that accesses a document.
@@ -431,3 +436,142 @@ async def convert_to_pdf(file: UploadFile = File(...), current_user: User = Depe
         print(f"Error during pure Python DOCX to PDF conversion: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Failed to convert the document to PDF.")
+
+@router.post("/chat-sessions", response_model=ChatSessionResponse)
+async def create_chat_session(session_data: ChatSessionCreate, current_user: User = Depends(get_current_user)):
+    # 1. Create the new chat session record
+    new_session = supabase.table("chat_sessions").insert({
+        "user_id": str(current_user.id),
+        "session_name": session_data.session_name
+    }).execute().data[0]
+    
+    # 2. Link the selected documents to this new session
+    documents_to_link = []
+    # First, get the internal UUIDs of the documents from their storage_paths
+    doc_metas = supabase.table("documents").select("id, storage_path").in_("storage_path", session_data.document_ids).execute().data
+    
+    for doc_meta in doc_metas:
+        documents_to_link.append({
+            "session_id": new_session['id'],
+            "document_id": doc_meta['id']
+        })
+        
+    if documents_to_link:
+        supabase.table("session_documents").insert(documents_to_link).execute()
+
+    return new_session
+
+@router.get("/chat-sessions", response_model=list[ChatSessionResponse])
+async def get_chat_sessions(current_user: User = Depends(get_current_user)):
+    sessions = supabase.table("chat_sessions").select("*").eq("user_id", str(current_user.id)).order("created_at", desc=True).execute()
+    return sessions.data
+
+@router.get("/chat-sessions/{session_id}")
+async def get_chat_session_details(session_id: str, current_user: User = Depends(get_current_user)):
+    # Verify user owns the session
+    session = supabase.table("chat_sessions").select("*").eq("id", session_id).eq("user_id", str(current_user.id)).single().execute().data
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found or you do not have permission to access it.")
+
+    # Get the linked documents
+    linked_docs_res = supabase.table("session_documents").select("document_id").eq("session_id", session_id).execute().data
+    doc_internal_ids = [doc['document_id'] for doc in linked_docs_res]
+    
+    # Get the full details of the linked documents
+    doc_details = []
+    if doc_internal_ids:
+        doc_details = supabase.table("documents").select("file_name, storage_path").in_("id", doc_internal_ids).execute().data
+
+    return {"session": session, "documents": doc_details}
+
+@router.post("/chat/{session_id}")
+async def chat_with_session(session_id: str, request: dict, current_user: User = Depends(get_current_user)):
+    query = request.get("query")
+    if not query:
+        raise HTTPException(status_code=400, detail="Query is missing.")
+
+    # 1. Verify user owns the session
+    session = supabase.table("chat_sessions").select("id").eq("id", session_id).eq("user_id", str(current_user.id)).single().execute().data
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+
+    # 2. Get all document IDs linked to this session
+    linked_docs_res = supabase.table("session_documents").select(
+        "documents(storage_path)" # Use a join to get the storage_path directly
+    ).eq("session_id", session_id).execute().data
+    
+    doc_ids = [doc['documents']['storage_path'] for doc in linked_docs_res if doc.get('documents')]
+    if not doc_ids:
+        return {"answer": "This chat session has no documents associated with it. Please add documents to the session to start chatting."}
+
+    # 3. Use the new multi-document retrieval service
+    context_chunks_with_meta = vector_service.retrieve_relevant_chunks_from_multiple_docs(doc_ids, query)
+    
+    if not context_chunks_with_meta:
+        return {"answer": "I could not find any relevant information across your selected documents to answer this question."}
+
+    # 4. Format the context with citations
+    context = ""
+    citations = {}
+    for chunk in context_chunks_with_meta:
+        doc_details = get_document_details([chunk['doc_id']])[0]
+        file_name = doc_details['file_name']
+        context += f"Source: {file_name}\nContent: {chunk['text']}\n\n"
+        citations[file_name] = chunk['doc_id']
+
+    prompt = f"""You are a research assistant. Based ONLY on the following context from multiple documents, answer the user's question. 
+    Cite the source file name for each piece of information you use.
+
+    Context:
+    ---
+    {context}
+    ---
+    Question: {query}
+    """
+    
+    answer = llm_service.generate_chat_completion(prompt)
+    return {"answer": answer, "citations": list(citations.keys())}
+
+@router.get("/documents", response_model=List[DocumentResponse])
+async def get_all_documents(current_user: User = Depends(get_current_user)):
+    """
+    Fetches all document metadata for the currently authenticated user.
+    """
+    try:
+        documents = supabase.table("documents").select(
+            "file_name, storage_path"
+        ).eq("user_id", str(current_user.id)).order("created_at", desc=True).execute()
+        
+        return documents.data
+    except Exception as e:
+        print(f"Error fetching documents for user {current_user.id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch documents.")
+    
+@router.delete("/chat-sessions/{session_id}")
+async def delete_chat_session(session_id: str, current_user: User = Depends(get_current_user)):
+    """
+    Deletes a specific chat session and its associated document links for the current user.
+    """
+    try:
+        # 1. Verify Ownership: First, ensure the session belongs to the user making the request.
+        # We perform a select before the delete to make sure we don't try to delete something that isn't ours.
+        session_to_delete = supabase.table("chat_sessions").select("id").eq("id", session_id).eq("user_id", str(current_user.id)).single().execute()
+
+        if not session_to_delete.data:
+            raise HTTPException(status_code=404, detail="Chat session not found or you do not have permission to delete it.")
+
+        # 2. Perform the Deletion.
+        # Because we set up `ON DELETE CASCADE` in our SQL schema, when we delete this
+        # `chat_sessions` record, the database will automatically delete all corresponding
+        # rows in the `session_documents` table.
+        supabase.table("chat_sessions").delete().eq("id", session_id).eq("user_id", str(current_user.id)).execute()
+
+        return {"message": "Chat session deleted successfully."}
+
+    except Exception as e:
+        print(f"An error occurred during chat session deletion: {e}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"An internal server error occurred while trying to delete the chat session: {e}"
+        )
