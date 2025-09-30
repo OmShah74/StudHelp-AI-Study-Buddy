@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Upload, LogOut, LoaderCircle } from 'lucide-react';
+import { Upload, LogOut, LoaderCircle, FileCog } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import toast from 'react-hot-toast';
 
@@ -27,6 +27,9 @@ export default function Header() {
             <LoaderCircle className="animate-spin text-slate-400" />
           ) : user ? (
             <>
+            <Link href="/converter" className="hidden sm:flex items-center space-x-2 px-4 py-2 bg-slate-700 font-semibold rounded-lg hover:bg-indigo-600 transition-all" title="DOCX to PDF Converter">
+                <FileCog size={18} /><span>Converter</span>
+              </Link>
               {pathname !== '/' && (
                 <Link href="/" className="hidden sm:flex items-center space-x-2 px-4 py-2 bg-indigo-600 font-semibold rounded-lg hover:bg-indigo-700 transition-all">
                   <Upload size={18} /><span>Dashboard</span>

@@ -2,13 +2,24 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 import uuid
 import json
 import traceback
+from fastapi.responses import FileResponse, StreamingResponse
 from supabase import create_client, Client
 from gotrue.types import User
+import tempfile
+import os
+from docx2pdf import convert
 from app.services import recommendation_service
 from app.schemas.models import ChatRequest, QuizRequest, RecommendationRequest
+from docx import Document
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate
+import io
 
 from app.services import document_service, vector_service, llm_service
-from app.schemas.models import ChatRequest, QuizRequest
+from app.schemas.models import ChatRequest, QuizRequest, RecommendationRequest, CommentRequest, CommentResponse
 from app.core.auth import get_current_user
 from app.core.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 
@@ -31,37 +42,78 @@ def verify_document_ownership(doc_id: str, user_id: str):
 
 
 @router.post("/upload")
-async def upload_document(
-    file: UploadFile = File(...), 
-    current_user: User = Depends(get_current_user)
-):
-    if file.content_type not in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
-        raise HTTPException(status_code=400, detail="Unsupported file type. Please upload a PDF or DOCX file.")
-    
-    # 1. Extract text and create chunks from the document.
-    text = document_service.extract_text_from_pdf(file.file) if file.content_type == "application/pdf" else document_service.extract_text_from_docx(file.file)
+async def upload_document(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
+    doc_id = str(uuid.uuid4())
+    has_pdf_viewable = False
+
+    # Use a temporary directory for safe file handling
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_file_path = os.path.join(temp_dir, file.filename)
+        
+        # Save the uploaded file to a temporary location on disk
+        with open(original_file_path, "wb") as f:
+            content = await file.read() # Read the content once
+            f.write(content)
+
+        text = ""
+        
+        # --- PDF Handling ---
+        if file.content_type == "application/pdf":
+            # Re-open the saved file for reading text
+            with open(original_file_path, "rb") as f:
+                text = document_service.extract_text_from_pdf(f)
+            
+            # Upload the original PDF directly as 'viewable.pdf'
+            supabase.storage.from_("files").upload(
+                file=original_file_path, 
+                path=f"{doc_id}/viewable.pdf",
+                file_options={"content-type": "application/pdf"}
+            )
+            has_pdf_viewable = True
+
+        # --- DOCX Handling ---
+        elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            # Re-open the saved file for reading text
+            with open(original_file_path, "rb") as f:
+                text = document_service.extract_text_from_docx(f)
+
+            pdf_path = os.path.join(temp_dir, f"{doc_id}.pdf")
+            try:
+                # Convert the saved DOCX file to PDF
+                convert(original_file_path, pdf_path)
+                
+                # Upload the NEWLY CREATED PDF as 'viewable.pdf'
+                supabase.storage.from_("files").upload(
+                    file=pdf_path, 
+                    path=f"{doc_id}/viewable.pdf",
+                    file_options={"content-type": "application/pdf"}
+                )
+                has_pdf_viewable = True
+            except Exception as e:
+                print(f"CRITICAL: Failed to convert DOCX to PDF for doc_id {doc_id}. Error: {e}")
+                has_pdf_viewable = False # Gracefully fail; doc won't be viewable
+        
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file type.")
+
+    # --- Text processing and DB insert (same as before) ---
     chunks = document_service.chunk_text(text)
     if not chunks:
+        # If text extraction failed, it's better to stop here
         raise HTTPException(status_code=400, detail="Could not extract any text from the document.")
 
-    # 2. Generate a unique ID and store the embeddings in Supabase Storage.
-    doc_id = str(uuid.uuid4())
     vector_service.create_and_store_embeddings(doc_id, chunks)
     
-    # 3. Insert a record into the Supabase Database to link the user to the file.
     try:
         supabase.table("documents").insert({
             "user_id": str(current_user.id),
             "file_name": file.filename,
-            "storage_path": doc_id
+            "storage_path": doc_id,
+            "has_pdf_viewable": has_pdf_viewable
         }).execute()
     except Exception as e:
-        # If the database insert fails, try to clean up the orphaned files in storage to save space.
-        try:
-            supabase.storage.from_("files").remove([f"{doc_id}/doc.index", f"{doc_id}/chunks.txt"])
-        except Exception as cleanup_e:
-            print(f"CRITICAL: Failed to cleanup orphaned storage files for doc_id {doc_id}: {cleanup_e}")
-        raise HTTPException(status_code=500, detail=f"Database error after file upload: {e}")
+        # Cleanup logic...
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     return {"document_id": doc_id, "filename": file.filename}
 
@@ -246,3 +298,136 @@ async def get_recommendations(request: RecommendationRequest, current_user: User
             status_code=500,
             detail=f"An internal server error occurred while fetching recommendations: {e}"
         )
+        
+@router.post("/upload")
+async def upload_document(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
+    doc_id = str(uuid.uuid4())
+    has_pdf_viewable = False
+
+    # We use a temporary directory to safely handle file operations
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_file_path = os.path.join(temp_dir, file.filename)
+        with open(original_file_path, "wb") as f:
+            f.write(file.file.read())
+            file.file.seek(0) # Reset file pointer
+
+        text = ""
+        # Handle PDF upload
+        if file.content_type == "application/pdf":
+            text = document_service.extract_text_from_pdf(file.file)
+            # Upload the original PDF to storage for viewing
+            with open(original_file_path, "rb") as f_read:
+                supabase.storage.from_("files").upload(file=f_read.read(), path=f"{doc_id}/viewable.pdf", file_options={"content-type": "application/pdf"})
+            has_pdf_viewable = True
+
+        # Handle DOCX upload and conversion
+        elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            text = document_service.extract_text_from_docx(file.file)
+            pdf_path = os.path.join(temp_dir, "converted.pdf")
+            try:
+                convert(original_file_path, pdf_path)
+                # Upload the converted PDF to storage for viewing
+                with open(pdf_path, "rb") as f_read:
+                    supabase.storage.from_("files").upload(file=f_read.read(), path=f"{doc_id}/viewable.pdf", file_options={"content-type": "application/pdf"})
+                has_pdf_viewable = True
+            except Exception as e:
+                print(f"Failed to convert DOCX to PDF: {e}")
+                # If conversion fails, we still proceed, but the doc won't be viewable
+                has_pdf_viewable = False
+
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file type.")
+
+    # Process text and store embeddings (same as before)
+    chunks = document_service.chunk_text(text)
+    if not chunks:
+        raise HTTPException(status_code=400, detail="Could not extract text from the document.")
+    vector_service.create_and_store_embeddings(doc_id, chunks)
+    
+    # Insert metadata into the database, including the new flag
+    try:
+        supabase.table("documents").insert({
+            "user_id": str(current_user.id),
+            "file_name": file.filename,
+            "storage_path": doc_id,
+            "has_pdf_viewable": has_pdf_viewable
+        }).execute()
+    except Exception as e:
+        # Cleanup logic...
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    return {"document_id": doc_id, "filename": file.filename}
+
+
+# --- NEW ENDPOINTS FOR COMMENTS ---
+
+@router.get("/documents/{doc_id}/comments", response_model=list[CommentResponse])
+async def get_comments(doc_id: str, current_user: User = Depends(get_current_user)):
+    doc_meta = supabase.table("documents").select("id").eq("storage_path", doc_id).eq("user_id", str(current_user.id)).single().execute()
+    if not doc_meta.data:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not own this document.")
+    
+    document_internal_id = doc_meta.data['id']
+    
+    comments = supabase.table("comments").select("*").eq("document_id", document_internal_id).order("created_at", desc=True).execute()
+    return comments.data
+
+
+@router.post("/documents/{doc_id}/comments", response_model=CommentResponse)
+async def add_comment(doc_id: str, comment: CommentRequest, current_user: User = Depends(get_current_user)):
+    doc_meta = supabase.table("documents").select("id").eq("storage_path", doc_id).eq("user_id", str(current_user.id)).single().execute()
+    if not doc_meta.data:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not own this document.")
+
+    document_internal_id = doc_meta.data['id']
+
+    new_comment = supabase.table("comments").insert({
+        "document_id": document_internal_id,
+        "user_id": str(current_user.id),
+        "page_number": comment.page_number,
+        "comment_text": comment.comment_text
+    }).execute()
+
+    return new_comment.data[0]
+
+@router.post("/convert-to-pdf")
+async def convert_to_pdf(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
+    if file.content_type != "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .docx file.")
+
+    try:
+        # 1. Read the uploaded DOCX file into memory
+        content = await file.read()
+        docx_buffer = io.BytesIO(content)
+        document = Document(docx_buffer)
+
+        # 2. Prepare to build the PDF in memory
+        pdf_buffer = io.BytesIO()
+        doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+        
+        # 3. Define styles and build the story (the content) for the PDF
+        styles = getSampleStyleSheet()
+        story = []
+        for para in document.paragraphs:
+            if para.text.strip(): # Add non-empty paragraphs
+                p = Paragraph(para.text, styles['Normal'])
+                story.append(p)
+        
+        # 4. Generate the PDF
+        doc.build(story)
+        pdf_buffer.seek(0)
+
+        # 5. Create a streaming response to send the file
+        # This is more memory-efficient than returning FileResponse from a temp file
+        return StreamingResponse(
+            content=pdf_buffer,
+            media_type='application/pdf',
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{os.path.splitext(file.filename)[0]}.pdf\""
+            }
+        )
+
+    except Exception as e:
+        print(f"Error during pure Python DOCX to PDF conversion: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Failed to convert the document to PDF.")

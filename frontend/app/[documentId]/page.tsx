@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { useParams } from 'next/navigation';
-// Import all necessary icons, including the new one for recommendations
-import { MessageSquare, Book, BrainCircuit, FileQuestion, Lightbulb } from 'lucide-react';
+
+// Import all necessary icons for the tabs
+import { Eye, MessageSquare, Book, BrainCircuit, FileQuestion, Lightbulb } from 'lucide-react';
 
 // Import all of the feature components that this page will manage
+import ViewerLayout from '@/components/ViewerLayout';
 import ChatComponent from "@/components/ChatComponent";
 import MindMapComponent from "@/components/MindMapComponent";
 import SummaryComponent from "@/components/SummaryComponent";
@@ -13,18 +15,20 @@ import QuizComponent from "@/components/QuizComponent";
 import RecommendationsComponent from "@/components/RecommendationsComponent";
 
 // Define a TypeScript type for all possible tabs to ensure type safety
-type Tab = 'chat' | 'summary' | 'mindmap' | 'quiz' | 'recommendations';
+type Tab = 'view' | 'chat' | 'summary' | 'mindmap' | 'quiz' | 'recommendations';
 
 export default function DocumentWorkspace() {
   const params = useParams();
   // Safely cast the documentId from the URL parameters as a string
   const documentId = params.documentId as string;
-  // State to keep track of the currently active tab, defaulting to 'chat'
-  const [activeTab, setActiveTab] = useState<Tab>('chat');
+  // State to keep track of the currently active tab, defaulting to 'view' as a good starting point
+  const [activeTab, setActiveTab] = useState<Tab>('view');
 
   // This function conditionally renders the correct component based on the active tab
   const renderTabContent = () => {
     switch (activeTab) {
+      case 'view':
+        return <ViewerLayout docId={documentId} />;
       case 'chat':
         return <ChatComponent documentId={documentId} />;
       case 'summary':
@@ -64,6 +68,7 @@ export default function DocumentWorkspace() {
     <main className="container mx-auto p-4">
       {/* The tab navigation bar */}
       <div className="flex flex-wrap items-center space-x-2 border-b-2 border-slate-700">
+          <TabButton tabName="view" icon={<Eye size={18} />} label="View Document" />
           <TabButton tabName="chat" icon={<MessageSquare size={18} />} label="Chat" />
           <TabButton tabName="summary" icon={<Book size={18} />} label="Summary" />
           <TabButton tabName="mindmap" icon={<BrainCircuit size={18} />} label="Mind Map" />

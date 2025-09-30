@@ -77,3 +77,35 @@ export const getRecommendations = async (docId: string, topic: string): Promise<
   });
   return response.data;
 };
+
+export interface Comment {
+    id: number;
+    page_number: number;
+    comment_text: string;
+    created_at: string;
+}
+
+export const getComments = async (docId: string): Promise<Comment[]> => {
+    const response = await apiClient.get(`/documents/${docId}/comments`);
+    return response.data;
+};
+
+export const addComment = async (docId: string, pageNumber: number, commentText: string): Promise<Comment> => {
+    const response = await apiClient.post(`/documents/${docId}/comments`, {
+        page_number: pageNumber,
+        comment_text: commentText,
+    });
+    return response.data;
+};
+
+export const convertToPdf = async (file: File): Promise<Blob> => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await apiClient.post('/convert-to-pdf', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    responseType: 'blob', // This is CRITICAL for handling file downloads
+  });
+
+  return response.data;
+};

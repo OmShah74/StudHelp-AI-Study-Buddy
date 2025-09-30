@@ -1,4 +1,6 @@
 from pydantic import BaseModel, Field
+from datetime import datetime
+import uuid
 
 class ChatRequest(BaseModel):
     doc_id: str
@@ -12,3 +14,15 @@ class QuizRequest(BaseModel):
 class RecommendationRequest(BaseModel):
     doc_id: str
     topic: str
+    
+class CommentRequest(BaseModel):
+    page_number: int
+    comment_text: str
+
+class CommentResponse(BaseModel):
+    id: int
+    document_id: uuid.UUID
+    user_id: uuid.UUID
+    page_number: int
+    comment_text: str
+    created_at: datetime
