@@ -148,19 +148,52 @@ async def generate_mindmap(request: ChatRequest, current_user: User = Depends(ge
     verify_document_ownership(request.doc_id, str(current_user.id))
     
     try:
-        context_chunks = vector_service.retrieve_relevant_chunks(request.doc_id, request.query, top_k=10)
+        context_chunks = vector_service.retrieve_relevant_chunks(request.doc_id, request.query, top_k=15)
         if not context_chunks:
             raise HTTPException(status_code=404, detail="Could not find relevant context for the mind map topic.")
         
         context = "\n\n".join(context_chunks)
+        
+        # This is a much more sophisticated prompt designed to extract a knowledge graph.
         prompt = f"""
-        Analyze the following text and generate a JSON object for a mind map with "nodes" and "edges".
-        - "nodes" must be an array of objects, each with "id", "data": {{"label": "Concept"}}, "position": {{"x":0, "y":0}}.
-        - "edges" must be an array of objects, each with "id", "source", "target".
-        IMPORTANT: Your entire response must be ONLY the JSON object.
-        Context: --- {context} --- JSON Output:
+        Analyze the following text based on the central topic: "{request.query}".
+        Your task is to act as a knowledge graph expert and generate a JSON object representing a detailed mind map.
+
+        The JSON object must have two keys: "nodes" and "edges".
+
+        ### Instructions for "nodes":
+        - Each node must be an object with "id" (string), "position" ({{ "x": 0, "y": 0 }}), and a "data" object.
+        - The "data" object for each node MUST contain the following three keys:
+          1. "label": A string for the main concept/entity name.
+          2. "description": A concise, one-sentence explanation of the concept based on the text.
+          3. "category": A single-word category for the concept. Choose from: ["Core Concept", "Process", "Example", "Property", "Person", "Location"]. This will be used for coloring.
+
+        ### Instructions for "edges":
+        - Each edge must be an object with "id", "source" (source node id), "target" (target node id), and "label" (a string describing the relationship, e.g., "is a type of", "leads to", "defined by").
+
+        ### Example Structure:
+        {{
+          "nodes": [
+            {{ "id": "1", "position": {{"x":0, "y":0}}, "data": {{ "label": "Photosynthesis", "description": "The process used by plants to convert light energy into chemical energy.", "category": "Process" }} }},
+            {{ "id": "2", "position": {{"x":0, "y":0}}, "data": {{ "label": "Chlorophyll", "description": "The green pigment responsible for absorbing light.", "category": "Property" }} }}
+          ],
+          "edges": [
+            {{ "id": "e1-2", "source": "1", "target": "2", "label": "requires" }}
+          ]
+        }}
+
+        IMPORTANT: Your response MUST be ONLY the valid JSON object. Do not include any explanations, markdown formatting, or any text outside the JSON structure.
+
+        Context to analyze:
+        ---
+        {context}
+        ---
+        JSON Output:
         """
+        
         llm_response_str = llm_service.generate_chat_completion(prompt)
+
+        # The robust JSON extraction and validation logic remains the same.
         json_start_index = llm_response_str.find('{')
         json_end_index = llm_response_str.rfind('}')
         
@@ -174,12 +207,14 @@ async def generate_mindmap(request: ChatRequest, current_user: User = Depends(ge
             raise ValueError("Missing 'nodes' or 'edges' key in JSON")
         
         return mind_map_json
+
     except (json.JSONDecodeError, ValueError) as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate a valid mind map: {e}")
+        print(f"Failed to parse LLM response into JSON: {e}")
+        print(f"LLM Response was: {llm_response_str}")
+        raise HTTPException(status_code=500, detail="Failed to generate a valid mind map structure.")
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
-
 
 @router.post("/summarize")
 async def summarize_document(request: ChatRequest, current_user: User = Depends(get_current_user)):
